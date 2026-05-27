@@ -1,0 +1,21 @@
+# Rust
+backend/target/
+backend/cache/
+**/*.rs.bk
+Cargo.lock
+# Keep Cargo.lock for binaries — uncomment if you prefer ignoring it for libraries only
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/public/dist/
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example

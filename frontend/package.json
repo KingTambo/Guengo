@@ -1,0 +1,22 @@
+{
+  "name": "guengo-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "dev": "node esbuild.config.mjs --watch"
+  },
+  "dependencies": {
+    "@google/genai": "^2.6.0",
+    "@supabase/supabase-js": "^2.106.2",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.25.12",
+    "typescript": "~5.9.3"
+  }
+}

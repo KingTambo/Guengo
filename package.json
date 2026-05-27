@@ -1,0 +1,17 @@
+{
+  "name": "guengo",
+  "private": true,
+  "workspaces": ["frontend"],
+  "scripts": {
+    "dev": "node scripts/ensure-cargo.mjs && node scripts/kill-stale-api.mjs && concurrently -k -n spa,api -c cyan,magenta \"npm run dev:spa\" \"npm run dev:api\"",
+    "dev:spa": "npm run watch --workspace frontend",
+    "dev:api": "cargo run --manifest-path backend/Cargo.toml",
+    "build": "npm run build --workspace frontend",
+    "build:rust": "cargo build --manifest-path backend/Cargo.toml --release",
+    "build:all": "npm run build && npm run build:rust",
+    "warm:opening-audio": "node scripts/warm-opening-audio.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

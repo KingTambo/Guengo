@@ -1,0 +1,12 @@
+{
+  "L01-section-1": [
+    { "id": "hello-hi", "label": "Hello / Hi — registre" },
+    { "id": "good-morning", "label": "Good morning" },
+    { "id": "afternoon-evening", "label": "Good afternoon / evening" },
+    { "id": "hey-morning-short", "label": "Hey & Morning (informal)" },
+    { "id": "how-do-you-do", "label": "How do you do? (très formel)" },
+    { "id": "capitals-register", "label": "Majuscules & contexte pro" },
+    { "id": "pronunciation", "label": "Pronunciation stress" },
+    { "id": "scenarios", "label": "Scenarios & quizzes" }
+  ]
+}
