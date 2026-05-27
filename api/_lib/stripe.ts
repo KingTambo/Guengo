@@ -95,6 +95,119 @@ export async function createCheckoutSession(
   return { status: 200, body: { checkout_url: parsed.url } };
 }
 
+async function fetchProfileStripeCustomerId(
+  userId: string,
+): Promise<string | null> {
+  const rest = supabaseRestBase();
+  const svc = env("SUPABASE_SERVICE_ROLE_KEY");
+  if (!rest || !svc) return null;
+  const url = `${rest}/profiles?id=eq.${encodeURIComponent(userId)}&select=stripe_customer_id`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${svc}`, apikey: svc },
+  });
+  if (!res.ok) return null;
+  const rows = (await res.json()) as { stripe_customer_id?: string | null }[];
+  const customerId = rows[0]?.stripe_customer_id?.trim();
+  return customerId || null;
+}
+
+async function saveProfileStripeCustomerId(
+  userId: string,
+  customerId: string,
+): Promise<void> {
+  await patchProfile(userId, { stripe_customer_id: customerId });
+}
+
+/** Profil → recherche Stripe par e-mail → création client si besoin. */
+async function resolveStripeCustomerId(
+  userId: string,
+  email: string | undefined,
+  sk: string,
+): Promise<string | null> {
+  const existing = await fetchProfileStripeCustomerId(userId);
+  if (existing) return existing;
+
+  if (email) {
+    const searchParams = new URLSearchParams({
+      query: `email:'${email.replace(/'/g, "\\'")}'`,
+      limit: "1",
+    });
+    const searchRes = await fetch(
+      `https://api.stripe.com/v1/customers/search?${searchParams}`,
+      { headers: { Authorization: `Bearer ${sk}` } },
+    );
+    if (searchRes.ok) {
+      const searchBody = (await searchRes.json()) as {
+        data?: { id?: string }[];
+      };
+      const found = searchBody.data?.[0]?.id?.trim();
+      if (found) {
+        await saveProfileStripeCustomerId(userId, found);
+        return found;
+      }
+    }
+  }
+
+  const createParams = new URLSearchParams({
+    "metadata[supabase_user_id]": userId,
+  });
+  if (email) createParams.set("email", email);
+
+  const createRes = await fetch("https://api.stripe.com/v1/customers", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${sk}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: createParams,
+  });
+  if (!createRes.ok) return null;
+  const created = (await createRes.json()) as { id?: string };
+  const customerId = created.id?.trim();
+  if (!customerId) return null;
+  await saveProfileStripeCustomerId(userId, customerId);
+  return customerId;
+}
+
+export async function createBillingPortalSession(
+  req: VercelRequest,
+): Promise<{ status: number; body: unknown }> {
+  if (!stripePaywallConfigured()) {
+    return { status: 503, body: { error: "stripe_unavailable" } };
+  }
+  const token = bearerToken(req);
+  if (!token) return { status: 401, body: { error: "unauthorized" } };
+
+  const user = await fetchSupabaseUser(token);
+  if (!user) return { status: 401, body: { error: "unauthorized" } };
+
+  const sk = env("STRIPE_SECRET_KEY")!;
+  const customerId = await resolveStripeCustomerId(user.id, user.email, sk);
+  if (!customerId) {
+    return { status: 502, body: { error: "stripe_error" } };
+  }
+
+  const returnUrl = `${publicAppUrl()}/app`;
+  const params = new URLSearchParams({
+    customer: customerId,
+    return_url: returnUrl,
+  });
+
+  const res = await fetch("https://api.stripe.com/v1/billing_portal/sessions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${sk}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params,
+  });
+  const text = await res.text();
+  if (!res.ok) return { status: 502, body: { error: "stripe_error" } };
+  const parsed = JSON.parse(text) as { url?: string };
+  if (!parsed.url) return { status: 502, body: { error: "stripe_error" } };
+  return { status: 200, body: { portal_url: parsed.url } };
+}
+
 function verifyStripeSignature(
   payload: Buffer,
   sigHeader: string,
@@ -169,6 +282,7 @@ async function handleCheckoutCompleted(object: Record<string, unknown>) {
     (object.metadata as { supabase_user_id?: string } | undefined)
       ?.supabase_user_id;
   const subId = object.subscription as string | undefined;
+  const customerId = object.customer as string | undefined;
   if (!userId || !subId) return 200;
 
   const subRes = await fetch(
@@ -178,7 +292,13 @@ async function handleCheckoutCompleted(object: Record<string, unknown>) {
   if (!subRes.ok) return 500;
   const sub = (await subRes.json()) as { status?: string };
   const premium = subscriptionIsPremium(sub.status ?? "");
-  await patchProfile(userId, { is_premium: premium });
+  const patch: Record<string, unknown> = {
+    is_premium: premium,
+    stripe_subscription_status: sub.status ?? "",
+  };
+  if (customerId) patch.stripe_customer_id = customerId;
+  patch.stripe_subscription_id = subId;
+  await patchProfile(userId, patch);
   return 200;
 }
 
@@ -189,9 +309,15 @@ async function handleSubscription(object: Record<string, unknown>) {
     ?.supabase_user_id;
   if (!userId) return 200;
   const status = (object.status as string) ?? "";
-  await patchProfile(userId, {
+  const patch: Record<string, unknown> = {
     is_premium: subscriptionIsPremium(status),
-  });
+    stripe_subscription_status: status,
+  };
+  const customerId = object.customer as string | undefined;
+  const subId = object.id as string | undefined;
+  if (customerId) patch.stripe_customer_id = customerId;
+  if (subId) patch.stripe_subscription_id = subId;
+  await patchProfile(userId, patch);
   return 200;
 }
 

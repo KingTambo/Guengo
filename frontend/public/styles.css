@@ -368,6 +368,14 @@ a {
   color: var(--accent);
 }
 
+.user-menu__hint {
+  margin: 0;
+  padding: 0.35rem 0.55rem 0.2rem;
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  color: #b45309;
+}
+
 .user-menu__item--danger {
   color: #dc2626;
   font-weight: 600;

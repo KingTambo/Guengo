@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { signOutAndGoToLogin } from "../lib/authSignOut";
+import { openStripeBillingPortal } from "../lib/stripeBillingPortal";
 
 function ProfileIcon() {
   return (
@@ -37,6 +38,8 @@ export function UserMenuDropdown({
     "";
 
   const [open, setOpen] = useState(false);
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [menuError, setMenuError] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,6 +60,19 @@ export function UserMenuDropdown({
     };
   }, [open]);
 
+  async function handleManageSubscription() {
+    if (!supabase) return;
+    setMenuError(null);
+    setBillingBusy(true);
+    try {
+      const { error } = await openStripeBillingPortal(supabase);
+      if (error) setMenuError(error);
+      else setOpen(false);
+    } finally {
+      setBillingBusy(false);
+    }
+  }
+
   return (
     <div className="user-menu" ref={wrapRef}>
       <button
@@ -65,7 +81,10 @@ export function UserMenuDropdown({
         aria-label="Menu compte"
         aria-expanded={open}
         aria-haspopup="true"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setMenuError(null);
+          setOpen((v) => !v);
+        }}
       >
         <ProfileIcon />
       </button>
@@ -79,7 +98,21 @@ export function UserMenuDropdown({
           </p>
           <button
             type="button"
+            className="user-menu__item"
+            disabled={billingBusy}
+            onClick={() => void handleManageSubscription()}
+          >
+            {billingBusy ? "Ouverture…" : "Gérer l’abonnement"}
+          </button>
+          {menuError ? (
+            <p className="user-menu__hint" role="alert">
+              {menuError}
+            </p>
+          ) : null}
+          <button
+            type="button"
             className="user-menu__item user-menu__item--danger"
+            disabled={billingBusy}
             onClick={() => {
               setOpen(false);
               void signOutAndGoToLogin(supabase);

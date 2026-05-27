@@ -59,6 +59,11 @@ pub struct StripeCheckoutEnvelope {
     pub checkout_url: String,
 }
 
+#[derive(Serialize)]
+pub struct StripePortalEnvelope {
+    pub portal_url: String,
+}
+
 /// Corps vide autorisé (Axum exige typiquement un extractor `body` sur POST).
 pub async fn create_checkout_session(
     headers: HeaderMap,
@@ -139,6 +144,161 @@ pub async fn create_checkout_session(
         .to_string();
 
     Ok(Json(StripeCheckoutEnvelope { checkout_url: url }))
+}
+
+/// Portail client Stripe (gérer / résilier l’abonnement).
+pub async fn create_billing_portal_session(
+    headers: HeaderMap,
+    _body: Bytes,
+) -> Result<Json<StripePortalEnvelope>, StatusCode> {
+    if !stripe_paywall_configured() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let token = bearer_token(&headers).ok_or(StatusCode::UNAUTHORIZED)?;
+    let supabase_base = supabase_url().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let anon = supabase_anon_key().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let sk = stripe_sk().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let user = fetch_supabase_user(&supabase_base, &anon, &token).await?;
+    let user_id = user["id"].as_str().ok_or(StatusCode::UNAUTHORIZED)?.to_string();
+    let email = user["email"].as_str().map(|s| s.to_string());
+
+    let customer_id = resolve_stripe_customer_id(&user_id, email.as_deref(), &sk).await?;
+    let base = public_app_url().trim_end_matches('/').to_string();
+    let return_url = format!("{base}/app");
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post("https://api.stripe.com/v1/billing_portal/sessions")
+        .header("Authorization", format!("Bearer {sk}"))
+        .form(&[("customer", customer_id.as_str()), ("return_url", return_url.as_str())])
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Stripe billing portal HTTP");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    let status = resp.status();
+    let body = resp.text().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    if !status.is_success() {
+        tracing::error!(status = %status, body = %body, "Stripe billing portal error");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let url = parsed["url"]
+        .as_str()
+        .ok_or(StatusCode::BAD_GATEWAY)?
+        .to_string();
+
+    Ok(Json(StripePortalEnvelope { portal_url: url }))
+}
+
+async fn fetch_profile_stripe_customer_id(user_id: &str) -> Result<Option<String>, StatusCode> {
+    let rest = supabase_rest_base().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let svc = supabase_service_role().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let url = format!(
+        "{rest}/profiles?id=eq.{user_id}&select=stripe_customer_id"
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {svc}"))
+        .header("apikey", svc)
+        .send()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let body = resp.text().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows: Vec<Value> = serde_json::from_str(&body).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(rows
+        .get(0)
+        .and_then(|r| r["stripe_customer_id"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string()))
+}
+
+async fn save_profile_stripe_customer_id(user_id: &str, customer_id: &str) -> Result<(), StatusCode> {
+    supabase_patch_profile(
+        user_id,
+        json!({
+            "stripe_customer_id": customer_id,
+            "updated_at": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        }),
+    )
+    .await
+}
+
+async fn resolve_stripe_customer_id(
+    user_id: &str,
+    email: Option<&str>,
+    sk: &str,
+) -> Result<String, StatusCode> {
+    if let Some(existing) = fetch_profile_stripe_customer_id(user_id).await? {
+        return Ok(existing);
+    }
+
+    let client = reqwest::Client::new();
+
+    if let Some(em) = email.filter(|s| !s.is_empty()) {
+        let escaped = em.replace('\'', "\\'");
+        let query = format!("email:'{escaped}'");
+        let search_resp = client
+            .get("https://api.stripe.com/v1/customers/search")
+            .header("Authorization", format!("Bearer {sk}"))
+            .query(&[("query", query.as_str()), ("limit", "1")])
+            .send()
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+        if search_resp.status().is_success() {
+            let search_body: Value = search_resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+            if let Some(found) = search_body["data"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|c| c["id"].as_str())
+                .filter(|s| !s.is_empty())
+            {
+                save_profile_stripe_customer_id(user_id, found).await?;
+                return Ok(found.to_string());
+            }
+        }
+    }
+
+    let mut params: Vec<(&str, String)> = vec![(
+        "metadata[supabase_user_id]",
+        user_id.to_string(),
+    )];
+    if let Some(em) = email.filter(|s| !s.is_empty()) {
+        params.push(("email", em.to_string()));
+    }
+
+    let create_resp = client
+        .post("https://api.stripe.com/v1/customers")
+        .header("Authorization", format!("Bearer {sk}"))
+        .form(&params)
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    let status = create_resp.status();
+    let body = create_resp.text().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+    if !status.is_success() {
+        tracing::error!(status = %status, body = %body, "Stripe create customer");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let customer_id = parsed["id"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or(StatusCode::BAD_GATEWAY)?
+        .to_string();
+
+    save_profile_stripe_customer_id(user_id, &customer_id).await?;
+    Ok(customer_id)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {

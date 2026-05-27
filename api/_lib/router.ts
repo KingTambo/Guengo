@@ -8,7 +8,7 @@ import {
 } from "./gemini";
 import { resolveLabel, topicsForTopic } from "./focus-topics";
 import { openingAudioBase64, openingDisplayCaptions } from "./opening";
-import { createCheckoutSession, stripePaywallConfigured, stripeWebhook } from "./stripe";
+import { createCheckoutSession, createBillingPortalSession, stripePaywallConfigured, stripeWebhook } from "./stripe";
 import {
   guidedStepCount,
   systemPrompt,
@@ -158,6 +158,12 @@ export async function routeApi(
   if (route === "stripe/checkout") {
     if (req.method !== "POST") return methodNotAllowed(res);
     const result = await createCheckoutSession(req);
+    return sendJson(res, result.status, result.body);
+  }
+
+  if (route === "stripe/portal") {
+    if (req.method !== "POST") return methodNotAllowed(res);
+    const result = await createBillingPortalSession(req);
     return sendJson(res, result.status, result.body);
   }
 

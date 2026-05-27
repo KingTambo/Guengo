@@ -362,6 +362,7 @@ async fn main() {
         .route("/api/live/nudge", get(live_nudge))
         .route("/api/live/subtitles", post(live_subtitles))
         .route("/api/stripe/checkout", post(stripe::create_checkout_session))
+        .route("/api/stripe/portal", post(stripe::create_billing_portal_session))
         .route("/api/stripe/webhook", post(stripe::stripe_webhook))
         // Client router (`App.tsx`) — explicit SPA paths; other routes fall back via ServeDir.
         .route(
