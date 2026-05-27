@@ -2,10 +2,13 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { VercelRequest } from "@vercel/node";
 import { env } from "./env";
 
+/** Abonnement Guengo — créé inline à la caisse Stripe (pas de price_id préconfiguré). */
+export const STRIPE_SUBSCRIPTION_EUR_CENTS = 1700;
+export const STRIPE_SUBSCRIPTION_PRODUCT_NAME = "Guengo Premium";
+
 export function stripePaywallConfigured(): boolean {
   return Boolean(
     env("STRIPE_SECRET_KEY") &&
-      env("STRIPE_PRICE_ID") &&
       env("STRIPE_WEBHOOK_SECRET") &&
       env("SUPABASE_SERVICE_ROLE_KEY") &&
       env("SUPABASE_URL") &&
@@ -59,15 +62,20 @@ export async function createCheckoutSession(
   if (!user) return { status: 401, body: { error: "unauthorized" } };
 
   const sk = env("STRIPE_SECRET_KEY")!;
-  const price = env("STRIPE_PRICE_ID")!;
   const base = publicAppUrl();
   const params = new URLSearchParams({
     mode: "subscription",
     success_url: `${base}/paywall?checkout=success`,
     cancel_url: `${base}/paywall?checkout=cancel`,
     client_reference_id: user.id,
-    "line_items[0][price]": price,
     "line_items[0][quantity]": "1",
+    "line_items[0][price_data][currency]": "eur",
+    "line_items[0][price_data][unit_amount]": String(
+      STRIPE_SUBSCRIPTION_EUR_CENTS,
+    ),
+    "line_items[0][price_data][recurring][interval]": "month",
+    "line_items[0][price_data][product_data][name]":
+      STRIPE_SUBSCRIPTION_PRODUCT_NAME,
     "subscription_data[metadata][supabase_user_id]": user.id,
   });
   if (user.email) params.set("customer_email", user.email);

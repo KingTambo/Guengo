@@ -34,7 +34,7 @@ struct AppConfigResponse {
     /// Clé publique Stripe (frontend / futur Elements) — jamais la clé secrète.
     #[serde(skip_serializing_if = "Option::is_none")]
     stripe_publishable_key: Option<String>,
-    /// Paywall actif seulement si STRIPE_SECRET_KEY, STRIPE_PRICE_ID, STRIPE_WEBHOOK_SECRET et SUPABASE_SERVICE_ROLE_KEY sont définis.
+    /// Paywall actif seulement si STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET et SUPABASE_SERVICE_ROLE_KEY sont définis.
     stripe_paywall_enabled: bool,
 }
 

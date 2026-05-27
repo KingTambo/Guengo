@@ -8,6 +8,14 @@ export type ProfileGateRow = {
   onboarding_answers: Record<string, string> | null;
 };
 
+/** Profil marqué terminé en base, ou les deux étapes locales sont cochées. */
+export function isOnboardingComplete(row: ProfileGateRow): boolean {
+  return Boolean(
+    row.onboarding_completed_at ||
+      (row.onboarding_quiz_completed_at && row.readiness_completed_at),
+  );
+}
+
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

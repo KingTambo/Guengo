@@ -1,5 +1,5 @@
 //! Stripe Checkout (subscription) + webhook handler for `profiles.is_premium`.
-//! Requires env: STRIPE_SECRET_KEY, STRIPE_PRICE_ID, STRIPE_WEBHOOK_SECRET,
+//! Requires env: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
 //! SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, SUPABASE_ANON_KEY — see `.env.example`.
 
 use axum::body::Bytes;
@@ -15,9 +15,11 @@ use subtle::ConstantTimeEq;
 
 type HmacSha256 = Hmac<Sha256>;
 
+const STRIPE_SUBSCRIPTION_EUR_CENTS: &str = "1700";
+const STRIPE_SUBSCRIPTION_PRODUCT_NAME: &str = "Guengo Premium";
+
 pub fn stripe_paywall_configured() -> bool {
     crate::env_nonempty("STRIPE_SECRET_KEY").is_some()
-        && crate::env_nonempty("STRIPE_PRICE_ID").is_some()
         && crate::env_nonempty("STRIPE_WEBHOOK_SECRET").is_some()
         && crate::env_nonempty("SUPABASE_SERVICE_ROLE_KEY").is_some()
         && crate::env_nonempty("SUPABASE_URL").is_some()
@@ -26,10 +28,6 @@ pub fn stripe_paywall_configured() -> bool {
 
 fn stripe_sk() -> Option<String> {
     crate::env_nonempty("STRIPE_SECRET_KEY")
-}
-
-fn stripe_price_id() -> Option<String> {
-    crate::env_nonempty("STRIPE_PRICE_ID")
 }
 
 fn webhook_secret() -> Option<String> {
@@ -75,7 +73,6 @@ pub async fn create_checkout_session(
     let supabase_base = supabase_url().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let anon = supabase_anon_key().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     let sk = stripe_sk().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-    let price = stripe_price_id().ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let user = fetch_supabase_user(&supabase_base, &anon, &token).await?;
     let user_id = user["id"].as_str().ok_or(StatusCode::UNAUTHORIZED)?;
@@ -91,8 +88,20 @@ pub async fn create_checkout_session(
         ("success_url", success_url.as_str()),
         ("cancel_url", cancel_url.as_str()),
         ("client_reference_id", user_id),
-        ("line_items[0][price]", price.as_str()),
         ("line_items[0][quantity]", "1"),
+        ("line_items[0][price_data][currency]", "eur"),
+        (
+            "line_items[0][price_data][unit_amount]",
+            STRIPE_SUBSCRIPTION_EUR_CENTS,
+        ),
+        (
+            "line_items[0][price_data][recurring][interval]",
+            "month",
+        ),
+        (
+            "line_items[0][price_data][product_data][name]",
+            STRIPE_SUBSCRIPTION_PRODUCT_NAME,
+        ),
         (
             "subscription_data[metadata][supabase_user_id]",
             user_id,

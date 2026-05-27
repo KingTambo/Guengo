@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { useAuth } from "../../../auth/AuthProvider";
-import { navigateReplace, onNavigate } from "../../../router";
+import { navigateAfterAuth } from "../../../lib/authRouting";
+import { onNavigate } from "../../../router";
 import { GoogleAuthButton } from "../GoogleAuthButton";
 
 export function LoginPage() {
@@ -62,7 +63,12 @@ export function LoginPage() {
                       password,
                     });
                   if (signErr) throw signErr;
-                  navigateReplace("/app");
+                  const {
+                    data: { user },
+                  } = await supabase.auth.getUser();
+                  if (user?.id) {
+                    await navigateAfterAuth(supabase, user.id);
+                  }
                 } catch (err) {
                   setError(
                     err instanceof Error

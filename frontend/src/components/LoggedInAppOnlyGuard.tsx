@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import { navigateReplace, usePathname } from "../router";
+import { navigateAfterAuth } from "../lib/authRouting";
+import { usePathname } from "../router";
 
 function pathIsAllowedWhenAuthed(pathname: string): boolean {
   return (
@@ -17,14 +18,14 @@ function pathIsAllowedWhenAuthed(pathname: string): boolean {
  */
 export function LoggedInAppOnlyGuard() {
   const pathname = usePathname();
-  const { loading, session, authRequired } = useAuth();
+  const { loading, session, authRequired, supabase } = useAuth();
 
   useEffect(() => {
-    if (loading || !authRequired || !session) return;
+    if (loading || !authRequired || !session || !supabase) return;
     if (!pathIsAllowedWhenAuthed(pathname)) {
-      navigateReplace("/app");
+      void navigateAfterAuth(supabase, session.user.id);
     }
-  }, [pathname, loading, session, authRequired]);
+  }, [pathname, loading, session, authRequired, supabase]);
 
   return null;
 }

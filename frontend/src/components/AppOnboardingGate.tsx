@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import { fetchAppConfig } from "../api/config";
 import { ONBOARDING_QUESTIONS } from "../data/onboardingQuestions";
-import { fetchGateProfile, type ProfileGateRow } from "../lib/profileGate";
+import {
+  fetchGateProfile,
+  isOnboardingComplete,
+  type ProfileGateRow,
+} from "../lib/profileGate";
 import { navigateReplace } from "../router";
 
 /**
@@ -14,8 +17,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
   const [bootLoading, setBootLoading] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileGateRow | null>(null);
-  const [stripePaywallEnabled, setStripePaywallEnabled] = useState(false);
-
   const [step, setStep] = useState(0);
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -29,9 +30,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
     setProfileError(null);
     setBootLoading(true);
     try {
-      const cfg = await fetchAppConfig();
-      setStripePaywallEnabled(Boolean(cfg.stripe_paywall_enabled));
-
       const row = await fetchGateProfile(supabase, session.user.id);
       if (!row) {
         setProfileError(
@@ -83,12 +81,7 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
 
       if (upErr) throw upErr;
 
-      const cfg = await fetchAppConfig();
-      if (cfg.stripe_paywall_enabled) {
-        navigateReplace("/paywall");
-        return;
-      }
-      await bootstrap();
+      navigateReplace("/paywall");
     } catch (err) {
       setProfileError(
         err instanceof Error ? err.message : "Enregistrement impossible.",
@@ -142,8 +135,9 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
 
   const quizDone = Boolean(profile.onboarding_quiz_completed_at);
   const readinessDone = Boolean(profile.readiness_completed_at);
+  const onboardingDone = isOnboardingComplete(profile);
 
-  if (quizDone && readinessDone && stripePaywallEnabled) {
+  if (onboardingDone) {
     navigateReplace("/paywall");
     return (
       <div className="page page--auth-gate" role="status">
@@ -295,7 +289,7 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
               disabled={saving}
               onClick={() => void saveReadiness()}
             >
-              {saving ? "En cours…" : "Commencer"}
+              {saving ? "En cours…" : "Commencer à prendre l\u2019anglais"}
             </button>
             {profileError ? (
               <p className="auth-card__hint" role="alert">
