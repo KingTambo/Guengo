@@ -5,12 +5,16 @@
   "outputDirectory": "frontend/public",
   "rewrites": [
     {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
       "source": "/((?!api/|dist/|styles\\.css|audio/).*)",
       "destination": "/index.html"
     }
   ],
   "functions": {
-    "api/[...path].ts": {
+    "api/index.ts": {
       "maxDuration": 60
     }
   }
