@@ -5,11 +5,7 @@
   "outputDirectory": "frontend/public",
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://guengo.railway.app/api/:path*"
-    },
-    {
-      "source": "/((?!api/|dist/|styles\\.css|audio/).*)",
+      "source": "/((?!dist/|styles\\.css|audio/).*)",
       "destination": "/index.html"
     }
   ]
