@@ -1,9 +1,14 @@
 # https://docs.railway.com/guides/config-as-code
+# IMPORTANT: In Railway → Service → Settings, set Root Directory to "/" (repo root),
+# NOT "frontend". Clear any custom Start Command (npm) in the dashboard — this file wins.
+
 [build]
-builder = "DOCKERFILE"
+builder = "dockerfile"
 dockerfilePath = "Dockerfile"
+dockerContext = "."
 
 [deploy]
+startCommand = "/app/guengo-api"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
-restartPolicyType = "ON_FAILURE"
+restartPolicyType = "on_failure"

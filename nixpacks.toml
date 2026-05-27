@@ -1,0 +1,19 @@
+# Fallback when Railpack/Nixpacks is used instead of Dockerfile (repo root only).
+# Prefer Dockerfile via railway.toml — faster and more reliable.
+
+[phases.setup]
+nixPkgs = ["nodejs_22", "cargo", "rustc", "pkg-config", "openssl"]
+
+[phases.install]
+dependsOn = ["setup"]
+cmds = ["npm ci"]
+
+[phases.build]
+dependsOn = ["install"]
+cmds = ["npm run build", "cargo build --release --manifest-path backend/Cargo.toml"]
+
+[start]
+cmd = "./backend/target/release/guengo-api"
+
+[variables]
+GUENGO_PUBLIC_DIR = "frontend/public"
