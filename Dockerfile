@@ -7,6 +7,7 @@ COPY package.json package-lock.json ./
 COPY frontend/package.json frontend/package.json
 RUN npm ci
 COPY frontend/ frontend/
+# Railway/Vercel expose dashboard env vars during `docker build` — bake public keys into SPA.
 RUN npm run build --workspace frontend
 
 FROM rust:1-bookworm AS backend

@@ -339,6 +339,10 @@ async fn main() {
         tracing::warn!("GEMINI_API_KEY missing — voice sessions unavailable");
     }
 
+    let supabase_ok = env_nonempty("SUPABASE_URL").is_some()
+        && env_nonempty("SUPABASE_ANON_KEY").is_some();
+    tracing::info!(supabase_ok, "Supabase auth env (SUPABASE_URL + SUPABASE_ANON_KEY)");
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)

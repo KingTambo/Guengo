@@ -2,5 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install",
   "buildCommand": "npm run build",
-  "outputDirectory": "frontend/public"
+  "outputDirectory": "frontend/public",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://guengo.railway.app/api/:path*"
+    },
+    {
+      "source": "/((?!api/|dist/|styles\\.css|audio/).*)",
+      "destination": "/index.html"
+    }
+  ]
 }
