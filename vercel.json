@@ -5,8 +5,13 @@
   "outputDirectory": "frontend/public",
   "rewrites": [
     {
-      "source": "/((?!dist/|styles\\.css|audio/).*)",
+      "source": "/((?!api/|dist/|styles\\.css|audio/).*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/[...path].ts": {
+      "maxDuration": 60
+    }
+  }
 }

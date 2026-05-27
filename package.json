@@ -12,6 +12,7 @@
     "warm:opening-audio": "node scripts/warm-opening-audio.mjs"
   },
   "devDependencies": {
+    "@vercel/node": "^5.1.16",
     "concurrently": "^9.2.1"
   }
 }

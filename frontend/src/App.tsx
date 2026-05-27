@@ -5,6 +5,7 @@ import { ProtectedAppRoute } from "./components/ProtectedAppRoute";
 import { AppOnboardingGate } from "./components/AppOnboardingGate";
 import { LoggedInAppOnlyGuard } from "./components/LoggedInAppOnlyGuard";
 import { AppPage } from "./pages/AppPage";
+import { PaywallPage } from "./pages/PaywallPage";
 import { LandingPage } from "./pages/LandingPage";
 import { usePathname } from "./router";
 
@@ -26,6 +27,14 @@ function AppRouter() {
         <AppOnboardingGate>
           <AppPage />
         </AppOnboardingGate>
+      </ProtectedAppRoute>
+    );
+  }
+
+  if (pathname === "/paywall" || pathname.startsWith("/paywall/")) {
+    return (
+      <ProtectedAppRoute>
+        <PaywallPage />
       </ProtectedAppRoute>
     );
   }

@@ -82,8 +82,8 @@ pub async fn create_checkout_session(
     let email = user["email"].as_str().unwrap_or("");
 
     let base = public_app_url().trim_end_matches('/').to_string();
-    let success_url = format!("{base}/app?checkout=success");
-    let cancel_url = format!("{base}/app?checkout=cancel");
+    let success_url = format!("{base}/paywall?checkout=success");
+    let cancel_url = format!("{base}/paywall?checkout=cancel");
 
     let client = reqwest::Client::new();
     let mut params: Vec<(&str, &str)> = vec![

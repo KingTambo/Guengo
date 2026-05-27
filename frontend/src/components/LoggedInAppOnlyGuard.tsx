@@ -3,7 +3,12 @@ import { useAuth } from "../auth/AuthProvider";
 import { navigateReplace, usePathname } from "../router";
 
 function pathIsAllowedWhenAuthed(pathname: string): boolean {
-  return pathname === "/app" || pathname.startsWith("/app/");
+  return (
+    pathname === "/app" ||
+    pathname.startsWith("/app/") ||
+    pathname === "/paywall" ||
+    pathname.startsWith("/paywall/")
+  );
 }
 
 /**

@@ -1,53 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "../auth/AuthProvider";
-import { fetchAppConfig, clearAppConfigCache } from "../api/config";
+import { fetchAppConfig } from "../api/config";
 import { ONBOARDING_QUESTIONS } from "../data/onboardingQuestions";
-import type { SupabaseClient } from "@supabase/supabase-js";
-
-type ProfileGateRow = {
-  onboarding_quiz_completed_at: string | null;
-  readiness_completed_at: string | null;
-  onboarding_completed_at: string | null;
-  is_premium: boolean;
-  onboarding_answers: Record<string, string> | null;
-};
-
-async function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchGateProfile(
-  supabase: SupabaseClient,
-  userId: string,
-): Promise<ProfileGateRow | null> {
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const { data, error } = await supabase
-      .from("profiles")
-      .select(
-        "onboarding_quiz_completed_at, readiness_completed_at, onboarding_completed_at, is_premium, onboarding_answers",
-      )
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (error) throw error;
-    if (data) {
-      const row = data as ProfileGateRow;
-      const answers =
-        row.onboarding_answers &&
-        typeof row.onboarding_answers === "object" &&
-        !Array.isArray(row.onboarding_answers)
-          ? { ...row.onboarding_answers }
-          : {};
-      return { ...row, onboarding_answers: answers };
-    }
-    await sleep(350);
-  }
-  return null;
-}
+import { fetchGateProfile, type ProfileGateRow } from "../lib/profileGate";
+import { navigateReplace } from "../router";
 
 /**
- * Flux : préférences onboarding → « Êtes-vous prêt… » → (paywall Stripe si configuré).
- * Premium en base ou paywall désactivé côté API → accès direct au tuteur.
+ * Flux : questionnaire → « Êtes-vous prêt… » → /paywall si non premium.
+ * Premium en base → accès direct au tuteur (/app).
  */
 export function AppOnboardingGate({ children }: { children: ReactNode }) {
   const { loading: authLoading, session, authRequired, supabase } = useAuth();
@@ -59,7 +19,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
   const [step, setStep] = useState(0);
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [checkoutBusy, setCheckoutBusy] = useState(false);
 
   const bootstrap = useCallback(async () => {
     if (!supabase || !session?.user?.id) {
@@ -107,35 +66,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
     void bootstrap();
   }, [authLoading, authRequired, session, supabase, bootstrap]);
 
-  /** Retour après Stripe Checkout — le webhook peut mettre quelques secondes. */
-  useEffect(() => {
-    if (
-      typeof window === "undefined" ||
-      !session?.user?.id ||
-      !authRequired ||
-      !supabase
-    ) {
-      return;
-    }
-
-    const q = new URLSearchParams(window.location.search);
-    if (q.get("checkout") !== "success") return;
-
-    clearAppConfigCache();
-    window.history.replaceState(null, "", window.location.pathname);
-
-    let n = 0;
-    const id = window.setInterval(() => {
-      n += 1;
-      void bootstrap();
-      if (n >= 12) window.clearInterval(id);
-    }, 2200);
-
-    void bootstrap();
-
-    return () => window.clearInterval(id);
-  }, [authRequired, session?.user?.id, supabase, bootstrap]);
-
   async function saveReadiness() {
     if (!supabase || !session?.user?.id) return;
     setSaving(true);
@@ -152,6 +82,12 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
         .eq("id", session.user.id);
 
       if (upErr) throw upErr;
+
+      const cfg = await fetchAppConfig();
+      if (cfg.stripe_paywall_enabled) {
+        navigateReplace("/paywall");
+        return;
+      }
       await bootstrap();
     } catch (err) {
       setProfileError(
@@ -159,56 +95,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
       );
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function startStripeCheckout() {
-    if (!supabase) return;
-    setCheckoutBusy(true);
-    setProfileError(null);
-    try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) {
-        setProfileError("Session introuvable. Reconnectez-vous.");
-        return;
-      }
-      const resp = await fetch("/api/stripe/checkout", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: "",
-      });
-
-      const bodyRaw = await resp.text();
-      if (!resp.ok) {
-        setProfileError(
-          resp.status === 503
-            ? "Paiement indisponible (configuration Stripe incomplète côté serveur)."
-            : `Paiement : erreur HTTP ${resp.status}.`,
-        );
-        return;
-      }
-      let parsed: { checkout_url?: string };
-      try {
-        parsed = JSON.parse(bodyRaw) as { checkout_url?: string };
-      } catch {
-        setProfileError("Réponse paiement invalide.");
-        return;
-      }
-      if (!parsed.checkout_url) {
-        setProfileError("Réponse paiement invalide.");
-        return;
-      }
-      window.location.assign(parsed.checkout_url);
-    } catch (err) {
-      setProfileError(
-        err instanceof Error ? err.message : "Impossible de lancer la caisse.",
-      );
-    } finally {
-      setCheckoutBusy(false);
     }
   }
 
@@ -256,6 +142,15 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
 
   const quizDone = Boolean(profile.onboarding_quiz_completed_at);
   const readinessDone = Boolean(profile.readiness_completed_at);
+
+  if (quizDone && readinessDone && stripePaywallEnabled) {
+    navigateReplace("/paywall");
+    return (
+      <div className="page page--auth-gate" role="status">
+        <p className="page--auth-gate__text">Redirection…</p>
+      </div>
+    );
+  }
 
   if (!quizDone) {
     const q = ONBOARDING_QUESTIONS[step];
@@ -401,48 +296,6 @@ export function AppOnboardingGate({ children }: { children: ReactNode }) {
               onClick={() => void saveReadiness()}
             >
               {saving ? "En cours…" : "Commencer"}
-            </button>
-            {profileError ? (
-              <p className="auth-card__hint" role="alert">
-                {profileError}
-              </p>
-            ) : null}
-          </section>
-        </main>
-      </div>
-    );
-  }
-
-  if (stripePaywallEnabled) {
-    return (
-      <div className="page page--onboarding page--paywall">
-        <main className="auth-shell">
-          <section
-            className="auth-card paywall-card"
-            aria-labelledby="paywall-title"
-          >
-            <h1 id="paywall-title" className="auth-card__title">
-              Accès premium
-            </h1>
-            <p className="auth-card__subtitle">
-              Un abonnement actif via Stripe débloque les sessions vocales
-              illimitées. Après paiement vous revenez ici automatiquement.
-            </p>
-            <button
-              type="button"
-              className="btn btn--cta auth-form__submit"
-              disabled={checkoutBusy}
-              onClick={() => void startStripeCheckout()}
-            >
-              {checkoutBusy ? "Redirection…" : "S’abonner avec Stripe"}
-            </button>
-            <button
-              type="button"
-              className="btn btn--ghost auth-form__submit paywall-card__refresh"
-              disabled={checkoutBusy}
-              onClick={() => void bootstrap()}
-            >
-              J’ai déjà payé — actualiser
             </button>
             {profileError ? (
               <p className="auth-card__hint" role="alert">
