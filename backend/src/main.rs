@@ -347,7 +347,7 @@ async fn main() {
     let index_html = static_root.join("index.html");
     let static_files = ServeDir::new(static_root).not_found_service(ServeFile::new(index_html.clone()));
 
-    let index_for_app = index_html.clone();
+    let index_for_spa = index_html.clone();
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/config", get(app_config))
@@ -359,25 +359,33 @@ async fn main() {
         .route("/api/live/subtitles", post(live_subtitles))
         .route("/api/stripe/checkout", post(stripe::create_checkout_session))
         .route("/api/stripe/webhook", post(stripe::stripe_webhook))
-        // Client router (`App.tsx`) expects `/app` for the learning UI; `ServeDir` alone 404s this path.
+        // Client router (`App.tsx`) — explicit SPA paths; other routes fall back via ServeDir.
         .route(
             "/app",
-            get_service(ServeFile::new(index_for_app.clone())),
+            get_service(ServeFile::new(index_for_spa.clone())),
         )
         .route(
             "/app/",
-            get_service(ServeFile::new(index_for_app.clone())),
+            get_service(ServeFile::new(index_for_spa.clone())),
         )
         .route(
             "/app/{*path}",
-            get_service(ServeFile::new(index_for_app)),
+            get_service(ServeFile::new(index_for_spa.clone())),
+        )
+        .route(
+            "/login",
+            get_service(ServeFile::new(index_for_spa.clone())),
+        )
+        .route(
+            "/signup",
+            get_service(ServeFile::new(index_for_spa.clone())),
         )
         .fallback_service(static_files)
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
-    let addr = "127.0.0.1:8080";
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|err| {
+    let addr = listen_socket_addr();
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|err| {
         eprintln!(
             "\n[Guengo] Cannot bind {addr}: {err}\n\
              Another guengo-api is probably still running.\n\
@@ -390,18 +398,35 @@ async fn main() {
     axum::serve(listener, app).await.expect("server");
 }
 
+/// Host/port for Railway, Render, etc. (`PORT` env). Local default: `0.0.0.0:8080`.
+fn listen_socket_addr() -> String {
+    let port = std::env::var("PORT")
+        .ok()
+        .map(|p| p.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "8080".to_string());
+    format!("0.0.0.0:{port}")
+}
+
 fn resolve_public_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("GUENGO_PUBLIC_DIR") {
-        return PathBuf::from(dir);
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
     }
 
-    let candidates = ["../frontend/public", "frontend/public"];
-    for rel in candidates {
-        let path = PathBuf::from(rel);
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let candidates = [
+        manifest.join("../frontend/public"),
+        PathBuf::from("../frontend/public"),
+        PathBuf::from("frontend/public"),
+    ];
+    for path in candidates {
         if path.is_dir() {
             return path;
         }
     }
 
-    PathBuf::from("../frontend/public")
+    manifest.join("../frontend/public")
 }
