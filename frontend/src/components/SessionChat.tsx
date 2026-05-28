@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchLiveConfig, fetchOpeningAudio, fetchLiveSessionShell, fetchTurnNudge, GeminiLiveSession } from "../api/geminiLive";
-import { splitDisplayParts } from "../lib/displayText";
+import { normalizeSubtitlePair, splitDisplayParts } from "../lib/displayText";
+import { logSessionIssue } from "../lib/sessionLog";
 import { logSubtitle, previewText } from "../lib/subtitleDebug";
 import {
   ensureAudioPlaybackUnlocked,
@@ -120,9 +121,11 @@ export function SessionChat({
       if (cancelledRef.current) return false;
 
       if (!clip?.audio) {
-        setError(
-          "Pas de fichier audio d’introduction (.pcm). Ajoutez-le sous frontend/public/audio/openings/ ou exécutez npm run warm:opening-audio (option --synthesize-if-missing + GEMINI_API_KEY pour le générer une fois en local).",
-        );
+        logSessionIssue("opening.missing", {
+          topicId,
+          hint: "Add .pcm under frontend/public/audio/openings/ or run npm run warm:opening-audio",
+        });
+        setError("L’introduction audio est indisponible pour le moment.");
         return false;
       }
 
@@ -133,11 +136,10 @@ export function SessionChat({
 
       setOpeningDismissed(true);
       return true;
-    } catch {
+    } catch (err) {
       if (!cancelledRef.current) {
-        setError(
-          "Lecture de l’intro impossible. Si l’API est hors ligne, vérifiez que le fichier .pcm est bien servi sous /audio/openings/. Sinon cliquez encore sur démarrer ou vérifiez le volume du navigateur.",
-        );
+        logSessionIssue("opening.playback-failed", err);
+        setError("Impossible de lire l’introduction. Réessayez ou vérifiez le volume.");
       }
       return false;
     } finally {
@@ -146,20 +148,6 @@ export function SessionChat({
       }
     }
   }
-
-  useEffect(() => {
-    if (!listening) return;
-
-    const timer = window.setTimeout(() => {
-      if (listeningRef.current && levelDisplayRef.current < 0.015) {
-        setError(
-          "Aucun signal du micro. Windows : Paramètres → Confidentialité → Microphone.",
-        );
-      }
-    }, 2500);
-
-    return () => window.clearTimeout(timer);
-  }, [listening]);
 
   useEffect(() => {
     setVoiceSupported(typeof navigator.mediaDevices?.getUserMedia === "function");
@@ -248,9 +236,10 @@ export function SessionChat({
         setBooting(false);
         setVoiceLoopReady(false);
         setStatus("Micro désactivé");
-        setError(
-          "L’introduction locale peut être lue sans clé. Pour répondre à Guengo, ajoutez GEMINI_API_KEY au fichier .env, redémarrez l’API, puis rechargez la page.",
-        );
+        logSessionIssue("live.unavailable", {
+          hint: "Set GEMINI_API_KEY in .env and restart the API",
+        });
+        setError("Les réponses vocales ne sont pas disponibles pour le moment.");
         return;
       }
 
@@ -298,12 +287,12 @@ export function SessionChat({
               setReplyEnglish(null);
               return;
             }
-            const parts = splitDisplayParts(trimmed);
-            const lineEn = parts.english.trim()
-              ? parts.english.trim()
-              : trimmed;
-            setReplyEnglish(lineEn);
-            // French row: only updated via `onFrenchSubtitle` (translation of finalized English).
+            const normalized = normalizeSubtitlePair(trimmed, null);
+            if (normalized.english) {
+              setReplyEnglish(normalized.english);
+            } else if (normalized.french) {
+              setReplyFrench(normalized.french);
+            }
           },
           onFrenchSubtitle: (fr) => {
             if (cancelled) return;
@@ -312,30 +301,30 @@ export function SessionChat({
               preview: fr ? previewText(fr, 160) : "",
             });
             setReplyFrench(fr ?? null);
+            if (fr) setOpeningDismissed(true);
           },
           onLevel: (level) => {
             levelTargetRef.current = level;
           },
           onError: (message) => {
             if (cancelled) return;
-            setError(message);
+            logSessionIssue("live.callback-error", message);
             setWaitingReply(false);
             setStatus("Appuyez sur le micro");
           },
           onClose: () => {
             if (cancelled) return;
+            logSessionIssue("live.closed");
             setVoiceLoopReady(false);
-            setError("Session vocale fermée.");
           },
         });
 
         if (!cancelled) setBooting(false);
-      } catch {
+      } catch (err) {
         if (cancelled) return;
         setVoiceLoopReady(false);
-        setError(
-          "Réponses Gemini Live indisponibles (clé invalide ou token refusé). L’introduction locale peut quand même rester audible si le fichier est servi sous /audio/openings/.",
-        );
+        logSessionIssue("live.connect-failed", err);
+        setError("Connexion vocale impossible. Réessayez dans un instant.");
         setStatus("");
         setBooting(false);
       }
@@ -366,11 +355,12 @@ export function SessionChat({
       listeningRef.current = true;
       setListening(true);
       setStatus("Parlez…");
-    } catch {
+    } catch (err) {
       stopLevelAnimation();
       listeningRef.current = false;
       setListening(false);
-      setError("Micro inaccessible.");
+      logSessionIssue("mic.start-failed", err);
+      setStatus("Appuyez sur le micro");
     }
   }
 
@@ -428,13 +418,14 @@ export function SessionChat({
     !listening &&
     (openingPlaying ||
       (!replyEnglish && !waitingReply && !speaking));
-  // Live tutor/user exchange captions (EN + FR from stream + caption LLM).
+  // Live tutor/user exchange captions (EN top, FR bottom — EN may arrive after FR when tutor speaks French).
   const showReply =
-    Boolean(replyEnglish) && !listening && !showOpening;
+    Boolean(replyEnglish || replyFrench) && !listening && !showOpening;
   const displayEnglish = showReply ? replyEnglish : showOpening ? openingEnglish : null;
   const displayFrench = showReply ? replyFrench : showOpening ? openingFrench : null;
-  const showTextBlock = Boolean(displayEnglish) && (showOpening || showReply);
-  /** FR often arrives async after EN; reserve layout so captions do not jump. */
+  const showTextBlock =
+    Boolean(displayEnglish || displayFrench) && (showOpening || showReply);
+  /** FR often arrives async after EN; reserve split layout during live replies. */
   const reserveFrenchSubtitleSlot =
     showReply || Boolean(showOpening && displayFrench);
 
@@ -489,7 +480,7 @@ export function SessionChat({
           <h1 className="voice-live__title">{topic.label}</h1>
         </div>
         <div className="voice-live__header-end">
-          <span className="voice-live__mode" title="Gemini 2.5 Native Audio">
+          <span className="voice-live__mode" title="Session vocale en direct">
             Live
           </span>
           <UserMenuDropdown triggerClassName="app-header__profile voice-live__header-profile" />
@@ -513,7 +504,9 @@ export function SessionChat({
               <>
                 <div className="voice-live__caption-en">
                   <div className="voice-live__reply-block voice-live__reply-block--visible">
-                    <p className="voice-live__reply">{displayEnglish}</p>
+                    {displayEnglish ? (
+                      <p className="voice-live__reply">{displayEnglish}</p>
+                    ) : null}
                   </div>
                 </div>
                 <div
@@ -612,7 +605,7 @@ export function SessionChat({
             booting ? (
               "Préparation de la session vocale…"
             ) : (
-              "Réponses vocales Gemini requises — voir message ou vérifiez GEMINI_API_KEY."
+              "Réponses vocales indisponibles pour le moment."
             )
           ) : voiceSupported ? (
             "Appuyez · parlez · réappuyez — réponse vocale directe"

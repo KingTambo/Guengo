@@ -1,4 +1,4 @@
-use crate::tts::SpeechLang;
+use crate::tts::{is_french_text, normalize_subtitle_lines, SpeechLang};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -283,10 +283,11 @@ struct GeminiCaptionPartOut {
 }
 
 const CAPTION_SYSTEM: &str = "Guengo live tutor — on-screen captions only.\n\
-You receive rough transcripts/snippets from Gemini Live (often English audio transcription).\n\
-The learner may have spoken English or French, but tutor output must always caption as British English primary with Parisian French translating that English underneath — never substitute a French-forward line.\n\
-Derive one clean English subtitle line; the French field must be a Parisian French translation of THAT English line only — not a separate paraphrase of mixed raw text.\n\
-Never put Spanish, Portuguese, Mandarin, Hindi, Arabic, German, Korean, or any third language into either field — only standard British tutor English plus Parisian French that translates that English. If raw contains odd tokens from bad ASR, prefer normalising to the intended English teaching line.\n\
+You receive rough transcripts/snippets from Gemini Live. The tutor may speak English or French aloud.\n\
+On-screen layout is fixed: `english` = British English (top/black), `french` = Parisian French (bottom/blue).\n\
+When raw is French speech transcription, put the spoken Parisian French line in `french` and the British English teaching equivalent in `english` — never swap them.\n\
+When raw is English speech, derive one clean English subtitle; `french` must translate THAT English line only.\n\
+Never put Spanish, Portuguese, Mandarin, Hindi, Arabic, German, Korean, or any third language into either field.\n\
 Return JSON matching the schema: both \"english\" and \"french\" are required strings.";
 
 const TRANSLATE_SUBTITLE_SYSTEM: &str = "Guengo subtitle translator. Output JSON only. Parisian French, brief, same teaching tone as the English line.";
@@ -339,9 +340,10 @@ async fn try_gemini_subtitles_llm_once(raw: &str) -> Option<SubtitleLines> {
 
     let user_prompt = format!(
         "Return JSON with keys english and french (both non-empty when there is anything to caption).\n\
-- english: one clean subtitle line — the tutor's English only — derived from raw below.\n\
-- french: translate THAT english line into natural Parisian French (subtitle style). french must correspond to english, not stray French from raw.\n\
-Only fix obvious ASR errors on the English; stay faithful to what was taught.\n\n\
+- english: British English subtitle (top row) — the teaching line in English.\n\
+- french: Parisian French subtitle (bottom row) — the French line (spoken French when tutor spoke French, otherwise a translation of english).\n\
+If raw is French audio transcription, do NOT put French in english and English in french.\n\
+Only fix obvious ASR errors; stay faithful to what was taught.\n\n\
 Raw:\n{trimmed}"
     );
 
@@ -400,7 +402,10 @@ Raw:\n{trimmed}"
         let t = s.trim().to_string();
         (!t.is_empty()).then_some(t)
     });
-    if !lines.english.is_empty() && lines.french.is_none() {
+    let normalized = normalize_subtitle_lines(lines.english, lines.french);
+    lines.english = normalized.english;
+    lines.french = normalized.french;
+    if !lines.english.is_empty() && lines.french.is_none() && !is_french_text(&lines.english) {
         tracing::info!(
             "[GEMINI_TRACK] Caption LLM: EN→FR translate pass (~1 HTTPS) — bilingual pair missing french"
         );

@@ -56,6 +56,48 @@ pub fn split_display_parts(text: &str) -> DisplayParts {
     }
 }
 
+/// On-screen captions: black row = English, blue row = Parisian French. Swap when inverted.
+pub fn normalize_subtitle_lines(english: String, french: Option<String>) -> DisplayParts {
+    let en = english.trim().to_string();
+    let fr = french
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    match fr {
+        None => {
+            if !en.is_empty() && is_french_text(&en) {
+                DisplayParts {
+                    english: String::new(),
+                    french: Some(en),
+                }
+            } else {
+                DisplayParts {
+                    english: en,
+                    french: None,
+                }
+            }
+        }
+        Some(fr_text) => {
+            let (en_fr, en_en) = lang_scores(&en);
+            let (fr_fr, fr_en) = lang_scores(&fr_text);
+            let en_is_french = is_french_text(&en) || en_fr > en_en;
+            let fr_is_english = !is_french_text(&fr_text) && fr_en > fr_fr;
+
+            if en_is_french && fr_is_english {
+                DisplayParts {
+                    english: fr_text,
+                    french: Some(en),
+                }
+            } else {
+                DisplayParts {
+                    english: en,
+                    french: Some(fr_text),
+                }
+            }
+        }
+    }
+}
+
 /// English-only lines to send to TTS — never includes French or italic subtitles.
 pub fn english_tts_lines(text: &str) -> Vec<String> {
     let display = split_display_parts(text);
@@ -75,7 +117,7 @@ pub fn is_english_tts(text: &str) -> bool {
     !cleaned.is_empty() && !is_french_text(text)
 }
 
-fn is_french_text(text: &str) -> bool {
+pub fn is_french_text(text: &str) -> bool {
     if has_french_accents(text) {
         return true;
     }
@@ -519,5 +561,15 @@ mod tests {
         let parts = split_bilingual_segments("Nice to meet you! What is your name?");
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].lang, SpeechLang::English);
+    }
+
+    #[test]
+    fn swaps_inverted_subtitle_lines() {
+        let lines = normalize_subtitle_lines(
+            "Très bien, essaye encore.".into(),
+            Some("Very good, try again.".into()),
+        );
+        assert_eq!(lines.english, "Very good, try again.");
+        assert_eq!(lines.french.as_deref(), Some("Très bien, essaye encore."));
     }
 }

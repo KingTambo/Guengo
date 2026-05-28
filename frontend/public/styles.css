@@ -1041,7 +1041,7 @@ a {
 .voice-live__reply {
   margin: 0;
   max-width: 36rem;
-  font-size: 1.0625rem;
+  font-size: 0.8125rem;
   line-height: 1.5;
   text-align: center;
   color: var(--text);
@@ -1062,7 +1062,7 @@ a {
 .voice-live__reply-fr {
   margin: 0;
   max-width: 36rem;
-  font-size: 0.96875rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   text-align: center;
   font-style: normal;

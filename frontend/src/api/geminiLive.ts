@@ -6,7 +6,8 @@ import {
   type LiveServerMessage,
   type Session,
 } from "@google/genai";
-import { hasFrenchOrthographyHints, splitDisplayParts } from "../lib/displayText";
+import { hasFrenchOrthographyHints, mergeStreamingCaptionParts, normalizeSubtitlePair } from "../lib/displayText";
+import { logSessionIssue } from "../lib/sessionLog";
 import { logSubtitle, previewText } from "../lib/subtitleDebug";
 import { PcmCapture, PcmPlayer } from "../lib/pcmStream";
 
@@ -209,12 +210,17 @@ export async function fetchLiveSubtitleLlm(
       english?: string;
       french?: string | null;
     };
-    const english = data.english?.trim() ?? "";
-    if (!english) return null;
-    const french =
+    const rawEn = data.english?.trim() ?? "";
+    if (!rawEn && !data.french?.trim()) return null;
+    const normalized = normalizeSubtitlePair(
+      rawEn,
       typeof data.french === "string" && data.french.trim().length > 0
         ? data.french.trim()
-        : null;
+        : null,
+    );
+    const english = normalized.english;
+    if (!english) return null;
+    const french = normalized.french;
     if (!french) {
       logSubtitle("captions.http.french-missing", {
         englishPreview: previewText(english, 140),
@@ -251,6 +257,8 @@ export class GeminiLiveSession {
   private subtitlePolishChain: Promise<void> = Promise.resolve();
   /** Avoids double enqueue when Live sends generationComplete then turnComplete for the same line */
   private subtitlePolishDedupeKey: string | null = null;
+  /** Debounced LLM polish while streaming French-only transcripts (English row stays empty until reply). */
+  private subtitleStreamPolishTimer: number | null = null;
 
   async connect(config: LiveConfig, callbacks: LiveSessionCallbacks): Promise<void> {
     this.close();
@@ -297,7 +305,7 @@ export class GeminiLiveSession {
           this.handleMessage(message);
         },
         onerror: (event: ErrorEvent) => {
-          this.callbacks.onError?.(event.message || "Erreur Live API.");
+          logSessionIssue("live.error", event.message || "Erreur Live API.");
         },
         onclose: () => {
           this.stopSpeakingPoll();
@@ -390,10 +398,40 @@ export class GeminiLiveSession {
           previewEn: previewText(out.english, 120),
           previewFr: out.french ? previewText(out.french, 100) : null,
         });
-        this.callbacks.onText?.(out.english);
-        this.callbacks.onFrenchSubtitle?.(out.french ?? null);
+        const normalized = normalizeSubtitlePair(out.english, out.french);
+        if (normalized.english) {
+          this.callbacks.onText?.(normalized.english);
+        }
+        if (normalized.french) {
+          this.callbacks.onFrenchSubtitle?.(normalized.french);
+        } else {
+          this.callbacks.onFrenchSubtitle?.(null);
+        }
       })
       .catch(() => {});
+  }
+
+  private clearSubtitleStreamPolishTimer(): void {
+    if (this.subtitleStreamPolishTimer !== null) {
+      window.clearTimeout(this.subtitleStreamPolishTimer);
+      this.subtitleStreamPolishTimer = null;
+    }
+  }
+
+  /** When Live transcribes French speech, derive the English top row via caption LLM. */
+  private maybeEnqueueStreamSubtitlePolish(): void {
+    const snap = this.llmSubtitleSnapshot().trim();
+    if (snap.length < 10) return;
+
+    this.clearSubtitleStreamPolishTimer();
+    this.subtitleStreamPolishTimer = window.setTimeout(() => {
+      this.subtitleStreamPolishTimer = null;
+      if (this.closed) return;
+      logSubtitle("captions.stream-polish", {
+        preview: previewText(snap, 120),
+      });
+      this.enqueuePolishedSubtitlesFromLlm(snap);
+    }, 450);
   }
 
   private llmSubtitleSnapshot(): string {
@@ -404,42 +442,41 @@ export class GeminiLiveSession {
     return `${t}\n---\n${m}`;
   }
 
-  /** Merge streamed output transcription + non-thought model text into the live English subtitle. French waits for `/api/live/subtitles`. */
+  /** Merge streamed output transcription + model text. EN = top/black, FR = bottom/blue. */
   private emitMergedCaptionUpdate(): void {
     const rawTrans = this.outputTranscriptBuffer.trim();
-    const transcribedParts = splitDisplayParts(rawTrans);
-    const englishFromTrans = transcribedParts.english.trim()
-      ? transcribedParts.english
-      : rawTrans;
-
     const rawModel = this.modelTurnCaptionBuffer.trim();
-    const modelParts = splitDisplayParts(rawModel);
-    let english =
-      englishFromTrans.trim() || modelParts.english.trim();
+    const { english, french } = mergeStreamingCaptionParts(rawTrans, rawModel);
 
-    // Last resort: show the unparsed tutor text rather than hiding both subtitles.
-    if (!english.trim() && rawModel) {
-      english = rawModel;
+    if (french) {
+      this.callbacks.onFrenchSubtitle?.(french);
     }
 
-    // French subtitles: same source as finalized English — only after `/api/live/subtitles`
-    // derives EN from raw transcript and FR as translation (see enqueuePolishedSubtitlesFromLlm).
-
-    if (english.trim()) {
-      const line = english.trim();
+    if (english) {
       logSubtitle("emit.onText", {
-        length: line.length,
-        preview: previewText(line, 140),
+        length: english.length,
+        preview: previewText(english, 140),
       });
-      this.callbacks.onText?.(line);
-    } else {
-      logSubtitle("emit.no-english", {
+      this.callbacks.onText?.(english);
+      return;
+    }
+
+    if (french) {
+      logSubtitle("emit.french-only", {
         transcriptBufferLen: rawTrans.length,
         modelBufferLen: rawModel.length,
-        transcriptPreview: previewText(rawTrans, 80),
-        modelPreview: previewText(rawModel, 80),
+        frenchPreview: previewText(french, 80),
       });
+      this.maybeEnqueueStreamSubtitlePolish();
+      return;
     }
+
+    logSubtitle("emit.no-english", {
+      transcriptBufferLen: rawTrans.length,
+      modelBufferLen: rawModel.length,
+      transcriptPreview: previewText(rawTrans, 80),
+      modelPreview: previewText(rawModel, 80),
+    });
   }
 
   private handleMessage(message: LiveServerMessage): void {
@@ -458,6 +495,7 @@ export class GeminiLiveSession {
       logSubtitle("live.interrupted", { clearingCaptions: true });
       this.subtitleEpoch += 1;
       this.subtitlePolishDedupeKey = null;
+      this.clearSubtitleStreamPolishTimer();
       this.outputTranscriptBuffer = "";
       this.outputTranscriptSegmentDone = false;
       this.modelTurnCaptionBuffer = "";
@@ -614,6 +652,7 @@ export class GeminiLiveSession {
     logSubtitle("session.interrupt", { clearingCaptions: true });
     this.subtitleEpoch += 1;
     this.subtitlePolishDedupeKey = null;
+    this.clearSubtitleStreamPolishTimer();
     this.player.stop();
     this.capture.setSending(false);
     this.streaming = false;
@@ -629,6 +668,7 @@ export class GeminiLiveSession {
     this.closed = true;
     this.subtitleEpoch += 1;
     this.subtitlePolishDedupeKey = null;
+    this.clearSubtitleStreamPolishTimer();
     this.subtitlePolishChain = Promise.resolve();
     this.capture.setSending(false);
     this.streaming = false;

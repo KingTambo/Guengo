@@ -64,7 +64,7 @@ export function AppPage() {
                   <p className="app-session-full__description">
                     {!configReady
                       ? "Chargement…"
-                      : "Sessions vocales indisponibles — ajoutez GEMINI_API_KEY dans les variables d’environnement Vercel (Production), puis redéployez."}
+                      : "Sessions vocales temporairement indisponibles. Réessayez plus tard."}
                   </p>
                 ) : null}
 
@@ -83,7 +83,7 @@ export function AppPage() {
                     ? "Chargement…"
                     : liveReady
                       ? "Démarrer la session vocale"
-                      : "GEMINI_API_KEY requise"}
+                      : "Indisponible"}
                 </button>
               </div>
             </section>
